@@ -1,77 +1,62 @@
 const axios = require('axios');
 require('dotenv').config();
+const fs = require('fs');
 
 const WEBHOOK_URL = process.env.DISCORD_WEBHOOK;
 const CHECK_INTERVAL = 30 * 60 * 1000; // 30 menit
-const HISTORY_DAYS = 7; // Cek 7 hari terakhir
+const HISTORY_DAYS = 20; // Cek 20 hari terakhir
+const KNOWN_CODES_FILE = 'known_codes.json';
 
 let lastCheckedTime = Date.now() - (HISTORY_DAYS * 24 * 60 * 60 * 1000);
-const knownCodes = new Set();
+let knownCodes = new Set();
+
+// Load known codes dari file saat startup
+function loadKnownCodes() {
+  try {
+    if (fs.existsSync(KNOWN_CODES_FILE)) {
+      const data = JSON.parse(fs.readFileSync(KNOWN_CODES_FILE, 'utf8'));
+      knownCodes = new Set(data);
+      console.log(`📂 Loaded ${knownCodes.size} known codes from file`);
+    }
+  } catch (error) {
+    console.error('Error loading known codes:', error.message);
+  }
+}
+
+// Save known codes ke file setiap kali ada kode baru
+function saveKnownCodes() {
+  try {
+    fs.writeFileSync(KNOWN_CODES_FILE, JSON.stringify(Array.from(knownCodes)), 'utf8');
+  } catch (error) {
+    console.error('Error saving known codes:', error.message);
+  }
+}
 
 async function getCodes() {
   try {
-    const response = await axios.get('https://codes.yar.gg', {
+    // Fetch dari API endpoint
+    const response = await axios.get('https://codes.yar.gg/api/codes', {
       timeout: 10000
     });
 
-    const html = response.data;
-    const codeRegex = /code['":\s]+['"]?([A-Z0-9]+)['"]?/gi;
-    
-    let match;
-    const codes = [];
-    while ((match = codeRegex.exec(html)) !== null) {
-      const code = match[1];
-      if (code.length >= 3 && !knownCodes.has(code)) {
-        codes.push(code);
-        knownCodes.add(code);
-      }
+    const data = response.data;
+    console.log('✅ API Response received. Active codes:', data.active?.length || 0);
+
+    if (!data.active || data.active.length === 0) {
+      console.log('⚠️ No active codes found');
+      return [];
     }
 
-    return codes;
-  } catch (error) {
-    console.error('Error fetching codes:', error.message);
-    return [];
-  }
-}
+    const codes = [];
+    
+    // Loop semua kode yang active
+    for (const item of data.active) {
+      const code = item.code;
+      const addedAt = new Date(item.addedAt).getTime();
 
-async function sendToDiscord(codes) {
-  if (!WEBHOOK_URL || codes.length === 0) return;
-
-  try {
-    const message = {
-      content: `🎉 **Found ${codes.length} new redeem code(s)!**\n\n${codes.map(c => `\`${c}\``).join('\n')}`
-    };
-
-    await axios.post(WEBHOOK_URL, message);
-    console.log(`✅ Sent ${codes.length} code(s) to Discord at ${new Date().toLocaleString()}`);
-  } catch (error) {
-    console.error('Error sending to Discord:', error.message);
-  }
-}
-
-async function checkCodes() {
-  console.log(`🔍 Checking for new codes... (${new Date().toLocaleString()})`);
-  const newCodes = await getCodes();
-  
-  if (newCodes.length > 0) {
-    console.log(`Found ${newCodes.length} new code(s):`, newCodes);
-    await sendToDiscord(newCodes);
-  } else {
-    console.log('No new codes found.');
-  }
-}
-
-async function start() {
-  console.log('🚀 Redeem Code Monitor Bot Started!');
-  console.log(`⏰ Will check every 30 minutes`);
-  console.log(`📊 History check enabled (last ${HISTORY_DAYS} days)`);
-  console.log(`📍 Discord Webhook: ${WEBHOOK_URL ? '✅ Connected' : '❌ Not set'}\n`);
-
-  // Cek pertama kali saat startup (termasuk history)
-  await checkCodes();
-
-  // Cek setiap 30 menit
-  setInterval(checkCodes, CHECK_INTERVAL);
-}
-
-start();
+      // Hanya ambil kode yang ditambahkan dalam HISTORY_DAYS terakhir
+      if (addedAt > lastCheckedTime && !knownCodes.has(code)) {
+        codes.push(code);
+        knownCodes.add(code);
+        console.log(`🆕 New code found: ${code} (added: ${item.addedAt})`*
+
